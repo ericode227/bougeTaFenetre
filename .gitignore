@@ -1,0 +1,19 @@
+# Backups
+*.bak
+*_*.bak
+*.bak.*
+
+# Exe compilé
+*.exe
+
+# Divers
+*.zip
+*.lnk
+*.ini
+.claude/
+.vscode/
+nul
+nouveau 3
+mp.txt
+noveille.txt
+Copie de sms.txt
