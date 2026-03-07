@@ -19,14 +19,6 @@ Gestionnaire de fenêtres pour Windows, écrit en AutoHotkey v2.
 - **Volume** : ±1% / ±10% ou couper le son
 - Liste des fenêtres ouvertes avec icône et suivi automatique
 
-## Prérequis
-
-- [AutoHotkey v2](https://www.autohotkey.com/) installé
-
-## Utilisation
-
-Double-cliquer sur `bougeTaFenetre.ahk` pour lancer le script.
-
 ### Raccourcis clavier
 
 | Raccourci | Action |
@@ -38,16 +30,6 @@ Double-cliquer sur `bougeTaFenetre.ahk` pour lancer le script.
 | Alt + S | Sauver position favorite |
 | Alt + R | Restaurer position favorite |
 | Alt + T | Basculer Always On Top |
-
-## Compilation
-
-Pour compiler en `.exe` :
-
-```powershell
-pwsh -File C:\Temp\compile.ps1
-```
-
-Requiert [AutoHotkey v2 Compiler (Ahk2Exe)](https://www.autohotkey.com/docs/v2/Scripts.htm#ahk2exe) dans `C:\Users\Eric\Mon Drive\Software\Compiler\`.
 
 ## Licence
 
