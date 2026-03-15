@@ -19,10 +19,6 @@ Gestionnaire de fenêtres pour Windows, écrit en AutoHotkey v2.
 - **Volume** : ±1% / ±10% ou couper le son
 - Liste des fenêtres ouvertes avec icône et suivi automatique
 
-## Prérequis
-
-- [AutoHotkey v2](https://www.autohotkey.com/) installé
-
 ## Utilisation
 
 Double-cliquer sur `bougeTaFenetre.ahk` pour lancer le script.
