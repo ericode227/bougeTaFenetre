@@ -20,43 +20,6 @@ BTN_ICON_SIZE := 52
 BTN_GAP       := 8
 SECTION_GAP   := 16
 
-; ================= UPDATE CLIPBOARD =================
-CheckUpdateFromClipboard() {
-    global SCRIPT_VERSION
-    clip := A_Clipboard
-    if !clip
-        return
-    if !InStr(clip, "#Requires AutoHotkey v2")
-        return
-    if !RegExMatch(clip, 'SCRIPT_VERSION\s*:=\s*"([^"]+)"', &m)
-        return
-    newVersion := m[1]
-    if newVersion = SCRIPT_VERSION
-        return
-    if !InStr(clip, "BuildGui") || !InStr(clip, "SCRIPT_VERSION") {
-        MsgBox("Contenu du presse-papiers suspect. Mise à jour annulée.", "Sécurité", "Icon!")
-        return
-    }
-    result := MsgBox(
-        "Nouvelle version détectée : " newVersion "`n"
-        "Version actuelle : " SCRIPT_VERSION "`n`n"
-        "Voulez-vous mettre à jour ?`n"
-        "⚠️ Ne mettez à jour qu'à partir d'une source de confiance.",
-        "Mise à jour disponible",
-        "YesNo Icon?"
-    )
-    if result = "Yes" {
-        try {
-            FileDelete(A_ScriptFullPath)
-            FileAppend(clip, A_ScriptFullPath, "UTF-8")
-            A_Clipboard := ""
-            MsgBox("✅ Mise à jour effectuée → Rechargement du script.", "Succès", "Iconi")
-            Reload()
-        } catch as e {
-            MsgBox("❌ Erreur lors de la mise à jour :`n" e.Message, "Erreur", "Icon!")
-        }
-    }
-}
 
 ; ================= STATE =================
 global state := Map("STEP", 50, "lastTarget", 0, "fontSize", 11, "guiAOT", true, "rightColVisible", true, "allPreset", 1)
@@ -64,10 +27,12 @@ global ctrlGui := 0, miniGui := 0
 global lbWindows := 0, lblStep := 0
 global windowMap := Map(), favPos := Map()
 global aotBar := 0, aotTxt := 0
-global lblVolume := 0
+global lblVolume := 0, lastKnownVol := -1, lastKnownMute := -1
 global miniClickCount := 0
 global actionButtons := []
 global rightColumnControls := []
+global col3Controls := []
+global editSend := 0
 global presetBtns := []
 global presetLastClick := Map(1, 0, 2, 0, 3, 0, 4, 0)
 global lblPresetIndicator := 0
@@ -292,18 +257,83 @@ ToggleMute(*) {
 }
 
 UpdateVolumeLabel() {
-    global lblVolume
+    global lblVolume, lastKnownVol, lastKnownMute
     if !lblVolume
         return
     try {
         vol := Round(SoundGetVolume())
         isMuted := SoundGetMute()
+        lastKnownVol  := vol
+        lastKnownMute := isMuted
         if isMuted
             lblVolume.Text := "🔇 Muet"
         else
             lblVolume.Text := "🔊 " vol "%"
     } catch {
         lblVolume.Text := "?"
+    }
+}
+
+SyncVolumeLabel() {
+    global lblVolume, lastKnownVol, lastKnownMute
+    if !lblVolume
+        return
+    try {
+        vol     := Round(SoundGetVolume())
+        isMuted := SoundGetMute()
+        if vol != lastKnownVol || isMuted != lastKnownMute
+            UpdateVolumeLabel()
+    } catch {
+    }
+}
+
+; ================= SEND TO TARGET =================
+SendTextToTarget(*) {
+    global state, editSend
+    if !HasValidTarget()
+        return
+    text := editSend.Value
+    if text = ""
+        return
+    WinActivate("ahk_id " state["lastTarget"])
+    WinWaitActive("ahk_id " state["lastTarget"], , 1)
+    SendText(text)
+}
+
+SendKeyToTarget(key) {
+    global state
+    if !HasValidTarget()
+        return
+    WinActivate("ahk_id " state["lastTarget"])
+    WinWaitActive("ahk_id " state["lastTarget"], , 1)
+    Send(key)
+}
+
+DblClickTargetCenter(*) {
+    global state
+    if !HasValidTarget()
+        return
+    try {
+        hwnd := state["lastTarget"]
+        WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " hwnd)
+        centerX := wx + ww // 2
+        centerY := wy + wh // 2
+        CoordMode("Mouse", "Screen")
+        MouseGetPos(&origX, &origY)
+        BlockInput("MouseMove")
+        try {
+            MouseMove(centerX, centerY)
+            Sleep(150)
+            Click()
+            Sleep(50)
+            Click()
+            MouseMove(origX, origY)
+        } finally {
+            BlockInput("MouseMoveOff")
+        }
+    } catch as e {
+        BlockInput("MouseMoveOff")
+        MsgBox("Erreur double clic :`n" e.Message, "Erreur", "Icon!")
     }
 }
 
@@ -747,25 +777,28 @@ SetGuiAOT(val) {
 
 ; ================= RIGHT COLUMN TOGGLE =================
 ToggleRightColumn(*) {
-    global state, ctrlGui, rightColumnControls, btnToggleCol
+    global state, ctrlGui, rightColumnControls, col3Controls, btnToggleCol
     state["rightColVisible"] := !state["rightColVisible"]
 
     for ctrl in rightColumnControls {
         try ctrl.Visible := state["rightColVisible"]
     }
+    for ctrl in col3Controls {
+        try ctrl.Visible := state["rightColVisible"]
+    }
 
     try {
         scale := state["fontSize"] / 11.0
-        fullWidth := Round(850 * scale)
+        fullWidth := Round(1170 * scale)
         halfWidth := Round(520 * scale)
 
         WinGetPos(&x, &y, , &h, ctrlGui.Hwnd)
         if state["rightColVisible"] {
             WinMove(x, y, fullWidth, h, ctrlGui.Hwnd)
-            btnToggleCol.Text := "◄◄ Cacher colonne →"
+            btnToggleCol.Text := "◄◄ Cacher colonnes →"
         } else {
             WinMove(x, y, halfWidth, h, ctrlGui.Hwnd)
-            btnToggleCol.Text := "→ Montrer colonne ►►"
+            btnToggleCol.Text := "→ Montrer colonnes ►► "
         }
     }
 }
@@ -1073,10 +1106,12 @@ BuildGui(pos := "") {
     listHeight := Round(240 * scale)      ; Hauteur de la liste
     listWidth := Round(455 * scale)       ; Largeur de la liste
     refreshWidth := Round(40 * scale)     ; Largeur bouton refresh
-    guiWidth := Round(850 * scale)        ; Largeur totale de la fenêtre
-    colLeftW := Round(500 * scale)        ; Largeur colonne gauche
+    colLeftW  := Round(500 * scale)       ; Largeur colonne gauche
     colRightX := Round(520 * scale)       ; Position X colonne droite
     colRightW := Round(310 * scale)       ; Largeur colonne droite
+    col3X     := Round(850 * scale)       ; Position X 3ème colonne
+    col3W     := Round(300 * scale)       ; Largeur 3ème colonne
+    guiWidth  := Round(1170 * scale)      ; Largeur totale (3 colonnes)
 
     ctrlGui := Gui("+Resize +Border", "Bouge ta fenêtre  v" SCRIPT_VERSION)
     ctrlGui.SetFont("s" state["fontSize"] " q5 c" TEXT_PRIMARY, "Segoe UI")
@@ -1335,6 +1370,121 @@ BuildGui(pos := "") {
     btnHelp.OnEvent("Click", (*) => ShowHelp())
     rightColumnControls.Push(btnHelp)
 
+    ; ══════════════════════════════════════════════════════════════════
+    ; 3ÈME COLONNE - ENVOYER À LA CIBLE
+    ; ══════════════════════════════════════════════════════════════════
+    col3Controls := []
+
+    ; ── ENVOYER À LA CIBLE ───────────────────────────────────────────
+    ctrlGui.SetFont("s" state["fontSize"] " Bold c" ACCENT_BLUE)
+    col3Controls.Push(ctrlGui.AddText("x" col3X " y15", "▸ ENVOYER À LA CIBLE"))
+    ctrlGui.SetFont("s" state["fontSize"] " Norm c" TEXT_PRIMARY)
+
+    editSend := ctrlGui.AddEdit("x" col3X " y+4 w" col3W " Background" BG_SURFACE, "")
+    editSend.SetFont("s" state["fontSize"] " c" TEXT_PRIMARY)
+    editSend.ToolTip := "Texte à envoyer à la fenêtre cible"
+    col3Controls.Push(editSend)
+
+    sendBtnW := Round((col3W - btnGap) / 2)
+    btnSend := ctrlGui.AddButton("x" col3X " y+4 w" sendBtnW " h" btnHeight " Background" BG_OVERLAY, "▶ Envoyer")
+    btnSend.SetFont("s" state["fontSize"] " Bold c" ACCENT_GREEN)
+    btnSend.ToolTip := "Envoyer le texte à la fenêtre cible (active la fenêtre)"
+    btnSend.OnEvent("Click", SendTextToTarget)
+    col3Controls.Push(btnSend)
+    actionButtons.Push(btnSend)
+
+    btnClear := ctrlGui.AddButton("x+8 w" sendBtnW " h" btnHeight " Background" BG_OVERLAY, "✕ Effacer")
+    btnClear.SetFont("s" state["fontSize"] " Bold c" TEXT_PRIMARY)
+    btnClear.ToolTip := "Vider le champ texte"
+    btnClear.OnEvent("Click", (*) => (editSend.Value := ""))
+    col3Controls.Push(btnClear)
+
+    ; ── TOUCHES SPÉCIALES ────────────────────────────────────────────
+    ctrlGui.SetFont("s" state["fontSize"] " Bold c" ACCENT_BLUE)
+    col3Controls.Push(ctrlGui.AddText("x" col3X " y+12", "▸ TOUCHES SPÉCIALES"))
+    ctrlGui.SetFont("s" state["fontSize"] " Norm c" TEXT_PRIMARY)
+
+    spBtnW := Round((col3W - 2*btnGap) / 3)
+
+    btnEnter := ctrlGui.AddButton("x" col3X " y+4 w" spBtnW " h" btnHeight " Background" BG_OVERLAY, "Enter")
+    btnEnter.SetFont("s" state["fontSize"] " Bold c" TEXT_PRIMARY)
+    btnEnter.OnEvent("Click", (*) => SendKeyToTarget("{Enter}"))
+    col3Controls.Push(btnEnter)
+    actionButtons.Push(btnEnter)
+
+    btnTab := ctrlGui.AddButton("x+8 w" spBtnW " h" btnHeight " Background" BG_OVERLAY, "Tab")
+    btnTab.SetFont("s" state["fontSize"] " Bold c" TEXT_PRIMARY)
+    btnTab.OnEvent("Click", (*) => SendKeyToTarget("{Tab}"))
+    col3Controls.Push(btnTab)
+    actionButtons.Push(btnTab)
+
+    btnEsc := ctrlGui.AddButton("x+8 w" spBtnW " h" btnHeight " Background" BG_OVERLAY, "Esc")
+    btnEsc.SetFont("s" state["fontSize"] " Bold c" TEXT_PRIMARY)
+    btnEsc.OnEvent("Click", (*) => SendKeyToTarget("{Esc}"))
+    col3Controls.Push(btnEsc)
+    actionButtons.Push(btnEsc)
+
+    btnSpace := ctrlGui.AddButton("x" col3X " y+4 w" spBtnW " h" btnHeight " Background" BG_OVERLAY, "Space")
+    btnSpace.SetFont("s" state["fontSize"] " Bold c" TEXT_PRIMARY)
+    btnSpace.OnEvent("Click", (*) => SendKeyToTarget("{Space}"))
+    col3Controls.Push(btnSpace)
+    actionButtons.Push(btnSpace)
+
+    btnBksp := ctrlGui.AddButton("x+8 w" spBtnW " h" btnHeight " Background" BG_OVERLAY, "Bksp")
+    btnBksp.SetFont("s" state["fontSize"] " Bold c" TEXT_PRIMARY)
+    btnBksp.OnEvent("Click", (*) => SendKeyToTarget("{Backspace}"))
+    col3Controls.Push(btnBksp)
+    actionButtons.Push(btnBksp)
+
+    btnDel := ctrlGui.AddButton("x+8 w" spBtnW " h" btnHeight " Background" BG_OVERLAY, "Del")
+    btnDel.SetFont("s" state["fontSize"] " Bold c" TEXT_PRIMARY)
+    btnDel.OnEvent("Click", (*) => SendKeyToTarget("{Delete}"))
+    col3Controls.Push(btnDel)
+    actionButtons.Push(btnDel)
+
+    ; ── RACCOURCIS CLAVIER ───────────────────────────────────────────
+    ctrlGui.SetFont("s" state["fontSize"] " Bold c" ACCENT_BLUE)
+    col3Controls.Push(ctrlGui.AddText("x" col3X " y+12", "▸ RACCOURCIS CLAVIER"))
+    ctrlGui.SetFont("s" state["fontSize"] " Norm c" TEXT_PRIMARY)
+
+    scBtnW := Round((col3W - 3*btnGap) / 4)
+
+    btnCtrlA := ctrlGui.AddButton("x" col3X " y+4 w" scBtnW " h" btnHeight " Background" BG_OVERLAY, "Ctrl+A")
+    btnCtrlA.SetFont("s" (state["fontSize"] - 1) " Bold c" TEXT_PRIMARY)
+    btnCtrlA.OnEvent("Click", (*) => SendKeyToTarget("^a"))
+    col3Controls.Push(btnCtrlA)
+    actionButtons.Push(btnCtrlA)
+
+    btnCtrlC := ctrlGui.AddButton("x+8 w" scBtnW " h" btnHeight " Background" BG_OVERLAY, "Ctrl+C")
+    btnCtrlC.SetFont("s" (state["fontSize"] - 1) " Bold c" TEXT_PRIMARY)
+    btnCtrlC.OnEvent("Click", (*) => SendKeyToTarget("^c"))
+    col3Controls.Push(btnCtrlC)
+    actionButtons.Push(btnCtrlC)
+
+    btnCtrlV := ctrlGui.AddButton("x+8 w" scBtnW " h" btnHeight " Background" BG_OVERLAY, "Ctrl+V")
+    btnCtrlV.SetFont("s" (state["fontSize"] - 1) " Bold c" TEXT_PRIMARY)
+    btnCtrlV.OnEvent("Click", (*) => SendKeyToTarget("^v"))
+    col3Controls.Push(btnCtrlV)
+    actionButtons.Push(btnCtrlV)
+
+    btnCtrlZ := ctrlGui.AddButton("x+8 w" scBtnW " h" btnHeight " Background" BG_OVERLAY, "Ctrl+Z")
+    btnCtrlZ.SetFont("s" (state["fontSize"] - 1) " Bold c" TEXT_PRIMARY)
+    btnCtrlZ.OnEvent("Click", (*) => SendKeyToTarget("^z"))
+    col3Controls.Push(btnCtrlZ)
+    actionButtons.Push(btnCtrlZ)
+
+    ; ── ACTIONS SOURIS ───────────────────────────────────────────────
+    ctrlGui.SetFont("s" state["fontSize"] " Bold c" ACCENT_BLUE)
+    col3Controls.Push(ctrlGui.AddText("x" col3X " y+12", "▸ ACTIONS SOURIS"))
+    ctrlGui.SetFont("s" state["fontSize"] " Norm c" TEXT_PRIMARY)
+
+    btnDblClick := ctrlGui.AddButton("x" col3X " y+4 w" col3W " h" btnHeight " Background" BG_OVERLAY, "🖱️ Double clic au centre")
+    btnDblClick.SetFont("s" state["fontSize"] " Bold c" TEXT_PRIMARY)
+    btnDblClick.ToolTip := "Double clic au centre de la fenêtre cible, puis remet la souris à sa position initiale"
+    btnDblClick.OnEvent("Click", DblClickTargetCenter)
+    col3Controls.Push(btnDblClick)
+    actionButtons.Push(btnDblClick)
+
     if pos = ""
         ctrlGui.Show("w" guiWidth " Center")
     else
@@ -1343,6 +1493,7 @@ BuildGui(pos := "") {
 
     RefreshWindowList()
     SetTimer(TrackActiveWindow, 300)
+    SetTimer(SyncVolumeLabel, 1000)
     UpdateAOTButton()
     UpdateButtonStates()
     UpdateVolumeLabel()
@@ -1370,5 +1521,4 @@ OnGuiResize() {
 #HotIf
 
 pos := LoadGuiState()
-CheckUpdateFromClipboard()
 BuildGui(pos)
